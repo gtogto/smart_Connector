@@ -66,10 +66,7 @@ unsigned char limitsw_msg[LIMITSWITCH_LENGTH+1]  = { 0x00, 0x00, 0x00, 43, 0x91,
 unsigned char boot_report[6] =    {'[','(','K',KEEPALIVE_PERIOD,')',']'} ;
 unsigned char alarm_push[18] =    {'[','(','O','0','0','0','0','0','0','0','0','0','0','0','0','0',')',']'} ;
 unsigned char tagerase_push[18] = {'[','<','0','0','0','0','0','0','0','0','0','0','0','0','E','0','>',']'} ;
-unsigned char tagwrite_push[100] = {'[','<','0','0','0','0','0','0','0','0','0','0','0','0','P', '0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0',
-				    '0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0','0',
-				    '>',']',} ;
-unsigned char tagupload_push[270]  = { 0,0,0x01,0x08,0x97,0,0,0,244,0,1,0,0,0,0,0,0,0,0,0,'0','0','0', };
+unsigned char tagwrite_push[100] = {'[','<','0','0','0','0','0','0','0','0','0','0','0','0','E','0','>',']',} ;
 //=====================================================================================================================================================================================
 volatile int STOP=FALSE; 
 int hex_to_ascii(char c, char d);
@@ -153,8 +150,7 @@ void main(int argc, char *argv[])
 	fcntl(s, F_SETFL, flag | O_NONBLOCK);	// O_NONBLOCK 
 
 
-	write(s, lineinfo_req,LINEINFO_REQ_LENGTH+1) ;
-	printf("Request process information  to SPAS....\r\n") ;
+	write(s, lineinfo_req,LINEINFO_REQ_LENGTH+1) ; 
 	while(1){ 
 		if((tcp_size = read(s,tcp_buf,BUF_LEN)) > 0)  {
                         tcp_rx_length  = ((int)tcp_buf[0] << 24) | ((int)tcp_buf[1] << 16) | ((int)tcp_buf[2] << 8) | ((int)tcp_buf[3]);
@@ -163,14 +159,14 @@ void main(int argc, char *argv[])
 				if( (smartconnectorID[0] == SC_ID1 ) && ( smartconnectorID[1] == SC_ID2) && ( smartconnectorID[2] == SC_ID3 )){
 					lineID[0] = tcp_buf[23] ;  lineID[1] = tcp_buf[24] ; lineID[2] = tcp_buf[25] ; lineID[3] = tcp_buf[26] ;
 					processID[0] = tcp_buf[27]; processID[1] = tcp_buf[28];processID[2] = tcp_buf[29];processID[3] = tcp_buf[30];
-					printf("Line info answer OK..........\r\n") ;
+					printf(" Line info answer OK...\r\n") ;
 					break ;
 				}
                         }
 		}
 	}
         write(fd, boot_report, 6); 
-        printf("Boot Report to MCU  and then while start ...\r\n") ;
+        printf(" while start ...\r\n") ;
 
 	//========================================================================================================================================== WHILE
 	while(1){
@@ -189,22 +185,14 @@ void main(int argc, char *argv[])
                                         write(fd,tagerase_push,18);
 					printf("Tag Erase command received...\r\n") ;
 				}
-				if( (tcp_buf[4] == TAGWRITE_CMD) && ( tcp_rx_length > 35 ) &&  (tcp_rx_length < 265  )){
+				if( (tcp_buf[4] == TAGWRITE_CMD) && ( tcp_rx_length > 35 ) &&  (tcp_rx_length < 95  )){
                                         for( i = 0 ; i< 12 ; i++) tagwrite_push[i+2] = tcp_buf[23+i]  ;
-					if( tcp_rx_length <  111 ){
-						 for( i = 0 ; i< (tcp_rx_length - 35 ) ; i++) tagwrite_push[i+15] = tcp_buf[35+i]  ;
-					}
-					else{
-						 for( i = 0 ; i< 75 ; i++) tagwrite_push[i+15] = tcp_buf[35+i]  ;
-					}
-                                        write(fd,tagwrite_push, 92);
-					for(i=0;i<75;i++) tagwrite_push[15+i] = 'F' ;
-					//tagwrite_push[14] = 'P' ;
-					//for( i = 0 ; i< (tcp_rx_length - 35) ; i++) tagwrite_push[i+15] = tcp_buf[35+i]  ;
-					//tagwrite_push[tcp_rx_length+3-23] = '>' ;tagwrite_push[tcp_rx_length+4-23] = ']' ;
-					//tagwrite_push[tcp_rx_length+5-23] = 0 ;
-                                        //write(fd,tagwrite_push, tcp_rx_length-23+5);
-                                        printf("Tag write command received...\r\n") ;
+					tagwrite_push[14] = 'P' ;
+					for( i = 0 ; i< (tcp_rx_length - 35) ; i++) tagwrite_push[i+15] = tcp_buf[35+i]  ;
+					tagwrite_push[tcp_rx_length+3-23] = '>' ;tagwrite_push[tcp_rx_length+4-23] = ']' ;
+					tagwrite_push[tcp_rx_length+5-23] = 0 ;
+                                        write(fd,tagwrite_push, tcp_rx_length-23+5);
+                                        printf("Tag write command received...= %s\r\n", tagwrite_push) ;
                                 }
 			}
 			else if( (tcp_rx_length+1) > tcp_size ){
@@ -299,11 +287,8 @@ void main(int argc, char *argv[])
 					//write(fd, period, 18) ;
                                 }
                                 else if( uart_buf[13] == TAG_UPLOAD_SC ){
-					for(i=0;i<229;i++) tagupload_push[35+i] = 'F' ; tagupload_push[264] = 0 ;
-					for(i=0;i<12;i++) tagupload_push[23+i] = uart_buf[1+i] ;
-					for(i=0;i<75;i++) tagupload_push[35+i] = uart_buf[14+i] ;
-					write(s, tagupload_push, 265) ;
-                                        printf("TAG_UPload report OK....=%d\r\n",mcu_rx_length);
+                                        printf("TAG_UPload report OK....\r\n");
+					//write(fd,download, 38) ;
                                 }
                         }
 		}
