@@ -203,7 +203,6 @@ void main(int argc, char *argv[])
 		/* Serial receive function */
 		if ((n=read(fd, &debug_rxd, 1))>0) {
 			printf("%c", debug_rxd);
-			write(fd, &debug_rxd, 1);
 			switch( state_ch1 ){
 				case START :
 					if( debug_rxd == START_CODE ){
