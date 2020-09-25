@@ -3,13 +3,16 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <stdio.h>
-
+#include <stdlib.h>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-
+#include <string.h>
 #include <sys/time.h>
+
+#include <time.h>
+#include <pthread.h>
 
 /* baudrate settings are defined in <asm/termbits.h>, which is
 included by <termios.h> */
@@ -31,14 +34,35 @@ included by <termios.h> */
 #define LENGTH2 2
 #define LENGTH3 3
 #define LENGTH4 4
-
-#define PAYLOARD 5
-#define NULL 6
+#define LENGTH5 5
+#define PAYLOAD 5
 #define END 7
+
+#define RECV_1 '('
+#define RECV_2 ')'
+
+#define LORA_START '<'
+#define LORA_END   '>'
+#define DEVICE_START '('
+#define DEVICE_END   ')'
+
+#define SC_KEEPALIVE_ID		'K'
+#define SC_ERASE_TAG		'E'
+#define SC_UPLOAD_TAG		'U'
+#define SC_CHANGE_PERIOD_TAG	'W'
+#define SC_DOWNLOAD_TAG		'P'
+
+#define TAG_WAKEUP_SC		'B'
+#define TAG_UPLOAD_SC		'P'
+#define MCU_DINPUT_SC		'I'
+#define SC_DOUTPUT_MCU		'O'
 
 #define BUF_LEN 1024
 
 volatile int STOP=FALSE; 
+int hex_to_ascii(char c, char d);
+int hex_to_int(char c);
+
 
 void main(int argc, char *argv[])
 {
@@ -48,7 +72,7 @@ void main(int argc, char *argv[])
 	struct termios oldtio,newtio;
 	char buf[1024];
 	int i ;
-	unsigned char test[9] = {0x5B, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x00, 0x5D};
+	//unsigned char test[9] = {0x5B, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x00, 0x5D};
 
 	/* TCP Socket */
 	int s, n;
@@ -57,91 +81,66 @@ void main(int argc, char *argv[])
         //struct sockaddr_in server_addr : 서버의 소켓주소 구조체
         char bufT[BUF_LEN+1];	
 
-	/**/
+	/* Compaire to tcp and uart length */
 	char recv_copy_buf[1024];
 	int pkt_len;
 	char start_p = '[';
 	char end_p = ']';
 
-	/**/
-	char debug_rxd;
-	char state_ch1;
-	char rxd1_buf[1024];
+	/*UART function*/
+	char uart_rxd;
+	char uart_rx_state=START;
+	char uart_buf[1024];
 	int SPAS_length;
-	int ch1_cnt;
-
+	int uart_rx_cnt;
+	int mcu_rx_length ;
+	int flag_mcu_rx_ok = 0  ;
+	
 	// 20200920_
 	int flag;
 	int k;
+
 	fd_set fs_status;
 
 	// 20200924_ gto
 	char uart_send_buf[1024] = {0,};
 	char *bye = "bye";
-		
-	if(argc != 2)
-        {
-                printf("usage : %s ip_Address\n", argv[0]);
-                exit(0);
-        }
-        haddr = argv[1];
- 
+	
+	char boot_1 = '(';
+	char boot_2 = 'K';
+	char boot_3 = '1';
+	char boot_4 = ')';
+
+	int rdcnt;
+
         if((s = socket(PF_INET, SOCK_STREAM, 0)) < 0)
         {//소켓 생성과 동시에 소켓 생성 유효검사
-                printf("can't create socket\n");
-                exit(0);
+		printf("can't create socket\n");
+		exit(0);
         }
- 
         bzero((char *)&server_addr, sizeof(server_addr));
-        //서버의 소켓주소 구조체 server_addr을 NULL로 초기화
- 
         server_addr.sin_family = AF_INET;
-        //주소 체계를 AF_INET 로 선택
         server_addr.sin_addr.s_addr = inet_addr(argv[1]);
-        //32비트의 IP주소로 변환
         server_addr.sin_port = htons(PORT);
-        //daytime 서비스 포트 번호
- 
-        if(connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-        {//서버로 연결요청
+        if(connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)        {
                 printf("can't connect.\n");
                 exit(0);
         }
 	else{
-		printf("Connect OK\r\n");
+		printf("TCP Connect OK\r\n");
 	}
 
-      
-	// Filling server information 
-        /* 
-          Open modem device for reading and writing and not as controlling tty
-          because we don't want to get killed if linenoise sends CTRL-C.
-        */
 	fd = open(MODEMDEVICE, O_RDWR | O_NOCTTY | O_NONBLOCK ); 	// O_NONBLOCK
 	if (fd <0) {perror(MODEMDEVICE); printf("uart open error\n");  exit(-1);}
+	else{
+		printf("UART Connect OK\r\n");
+	}
 	tcgetattr(fd,&oldtio); /* save current serial port settings */
 	bzero(&newtio, sizeof(newtio)); /* clear struct for new port settings */        
-        /* 
-          BAUDRATE: Set bps rate. You could also use cfsetispeed and cfsetospeed.
-          CRTSCTS : output hardware flow control (only used if the cable has
-                    all necessary lines. See sect. 7 of Serial-HOWTO)
-          CS8     : 8n1 (8bit,no parity,1 stopbit)
-          CLOCAL  : local connection, no modem contol
-          CREAD   : enable receiving characters
-        */
 	newtio.c_cflag = BAUDRATE | CRTSCTS | CS8 | CLOCAL | CREAD;
-        /*
-          IGNPAR  : ignore bytes with parity errors
-          ICRNL   : map CR to NL (otherwise a CR input on the other computer
-                    will not terminate input)
-          otherwise make device raw (no other input processing)
-        */
 	newtio.c_iflag = IGNPAR | ICRNL;
-       
 	newtio.c_oflag = 0;
-       
 	newtio.c_lflag = 0; 	 // ICANON; or 1
-       
 	newtio.c_cc[VINTR]    = 0;     /* Ctrl-c */ 
 	newtio.c_cc[VQUIT]    = 0;     /* Ctrl-\ */
 	newtio.c_cc[VERASE]   = 0;     /* del */
@@ -159,112 +158,105 @@ void main(int argc, char *argv[])
 	newtio.c_cc[VWERASE]  = 0;     /* Ctrl-w */
 	newtio.c_cc[VLNEXT]   = 0;     /* Ctrl-v */
 	newtio.c_cc[VEOL2]    = 0;     /* '\0' */
-        /* 
-          now clean the modem line and activate the settings for the port
-        */
 	tcflush(fd, TCIFLUSH);
-        tcsetattr(fd,TCSANOW,&newtio);        
-        
+        tcsetattr(fd,TCSANOW,&newtio);
+
 	// 20200920_
 	flag = fcntl(s, F_GETFL, 0);
 	fcntl(s, F_SETFL, flag | O_NONBLOCK);	// O_NONBLOCK 
 
-	state_ch1 = START;
-	while(1){/*
-		int ret = strcmp(uart_send_buf, bye);
-		int final = 0;
-		if(ret == 0) {
-			printf("Goodbye uart! \n");
-			final = 1;
-			if (final == 1) {
-				break;
-			}
-		}
-		else {
-			scanf("%s", &uart_send_buf);
-			write(fd, &start_p, 1);
-			write(fd, uart_send_buf, 1024);
-			write(fd, &end_p, 1);
-		}*/
 
-		/*
+	write(fd, &start_p, 1);	write(fd, &boot_1, 1);	write(fd, &boot_2, 1);	write(fd, &boot_3, 1);	write(fd, &boot_4, 1);	write(fd, &end_p, 1);
+	printf(" while start ...\r\n") ;
+	while(1){
+
 		if((n=read(s,bufT,BUF_LEN)) > 0)
-	        {//서버가 보내오는 daytime 데이터의 수신
+	        {
+			//서버가 보내오는 daytime 데이터의 수신
         		bufT[n] = NULL;
 			pkt_len = ((int)bufT[0] << 24) | ((int)bufT[1] << 16) | ((int)bufT[2] << 8) | ((int)bufT[3]);
+			/*
 			if((pkt_len+1) == n)
 			{
 				write(fd,&start_p,1);
 				write(fd,bufT,n);
 				write(fd,&end_p,1);
-			}
-		}*/
+			}*/
+			printf("TCP receive: %s", bufT);
+			//write(s, n, strlen(bufT)+1);
+			//write(s,(rxd1_buf+1),(ch1_cnt-2));
+			//write(fd, bufT, n);
+
+		}
 
 		/* Serial receive function */
-		if ((n=read(fd, &debug_rxd, 1))>0) {
-			printf("%c", debug_rxd);
-			write(fd, &debug_rxd, 1);
-			switch( state_ch1 ){
+		if ((n=read(fd, &uart_rxd, 1))>0) {
+			switch( uart_rx_state ){
 				case START :
-					if( debug_rxd == START_CODE ){
-						state_ch1 = LENGTH1 ;
-						rxd1_buf[0] = START_CODE ;
+					if( uart_rxd == START_CODE ){
+						uart_rx_state =  PAYLOAD ;
+						uart_rx_cnt = 0 ;
 					}
 					break ;
-
-				case LENGTH1 :
-					SPAS_length =  (int)debug_rxd << 24 ;
-					state_ch1 = LENGTH2 ;
-					rxd1_buf[1] = debug_rxd ;
-					break ;
-
-				case LENGTH2 :
-					SPAS_length = SPAS_length   | ( (int)debug_rxd << 16) ;
-					state_ch1 = LENGTH3 ;
-					rxd1_buf[2] = debug_rxd ;
-					break ;
-
-				case LENGTH3:
-					SPAS_length = SPAS_length    |( (int)debug_rxd << 8) ;
-					state_ch1 = LENGTH4 ;
-					rxd1_buf[3] = debug_rxd ;
-					break ;
-	
-				case LENGTH4:
-					SPAS_length = SPAS_length   | ( (int)debug_rxd ) ;
-					ch1_cnt = 5 ;
-					rxd1_buf[4] = debug_rxd ;
-					state_ch1 = PAYLOARD ;
-					break ;
-
-				case PAYLOARD :
-					rxd1_buf[ ch1_cnt++] = debug_rxd ;
-					if( ch1_cnt == (SPAS_length+1) ) state_ch1 = NULL ;
-					break ;
-
-				case NULL :
-					if( debug_rxd == 0x00 ){
-						state_ch1 = END ;
-						rxd1_buf[ ch1_cnt++]  = 0x00 ;
+				case PAYLOAD :
+					uart_buf[ uart_rx_cnt++] = uart_rxd ;
+					if( uart_rxd == START_CODE ){
+						uart_rx_state = PAYLOAD ;
+						uart_rx_cnt = 0 ;
 					}
-					else state_ch1 = START ;
-					break ;
-
-				case END :
-					if( debug_rxd == END_CODE ){
-						rxd1_buf[ ch1_cnt++]  = END_CODE ;
-						for(i=0;i<ch1_cnt; i++)printf("%02X. ",rxd1_buf[i] ) ;
-						write(s,(rxd1_buf+1),(ch1_cnt-2));
-						printf("Received OK....\n") ;	
+					else if( uart_rxd == END_CODE ){
+						flag_mcu_rx_ok = 1 ;
+						mcu_rx_length = uart_rx_cnt-1 ;
+						uart_rx_state = START ;
+						//for( k=0;k<mcu_rx_length;k++)printf("%c",uart_buf[k]) ;
+                                                //printf("Received OK....\n") ;
 					}
-					state_ch1 = START;
-					ch1_cnt = 0 ;
+					if( uart_rx_cnt > 254 ) {
+						uart_rx_state = START ;
+						uart_rx_cnt = 0 ;
+					}
+					//write(s,(rxd1_buf+1),(ch1_cnt-2));
 					break ;
 			}
+			//printf("%s\r\n", rxd1_buf);
 		}
-	}	
+		if( flag_mcu_rx_ok ){
+			flag_mcu_rx_ok = 0 ;
+			if(  (uart_buf[0] == DEVICE_START ) && (uart_buf[ mcu_rx_length - 1 ] == DEVICE_END )){
+				if( uart_buf[1] == SC_KEEPALIVE_ID ){ //send keep alive  message to SPAS  
+					printf("Keepalive message trigger Ok... \r\n") ;
+				}
+				else if( uart_buf[1] == MCU_DINPUT_SC ){
+					printf("Data input report OK....\r\n");
+				}
+			}
+			if(  (uart_buf[0] == LORA_START ) && (uart_buf[ mcu_rx_length - 1 ] == LORA_END )){
+                                if( uart_buf[13] == TAG_WAKEUP_SC ){ //send keep alive  message to SPAS
+                                        printf("TAG Wakeup  message  Ok... \r\n") ;
+                                }
+                                else if( uart_buf[13] == TAG_UPLOAD_SC ){
+                                        printf("TAG_UPload report OK....\r\n");
+                                }
+                        }
+		}
+	}
 	
 	tcsetattr(fd,TCSANOW,&oldtio);
 	close(s);
-	return 0;
+	//return 0;
 }
+
+/* Convert function */
+int hex_to_int(char c){ 
+	int first = c/16 - 3; 
+	int second = c % 16; 
+	int result = first*10 + second; 
+	if(result > 9) result--; 
+	return result; 
+} 
+
+int hex_to_ascii(char c, char d){ 
+	int high = hex_to_int(c) * 16; 
+	int low = hex_to_int(d); 
+	return high+low; 
+} 

@@ -3,13 +3,16 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <stdio.h>
-
+#include <stdlib.h>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-
+#include <string.h>
 #include <sys/time.h>
+
+#include <time.h>
+#include <pthread.h>
 
 /* baudrate settings are defined in <asm/termbits.h>, which is
 included by <termios.h> */
@@ -31,14 +34,19 @@ included by <termios.h> */
 #define LENGTH2 2
 #define LENGTH3 3
 #define LENGTH4 4
-
+#define LENGTH5 5
 #define PAYLOARD 5
 #define NULL 6
 #define END 7
 
+#define RECV_1 '('
+#define RECV_2 ')'
+
 #define BUF_LEN 1024
 
 volatile int STOP=FALSE; 
+int hex_to_ascii(char c, char d);
+int hex_to_int(char c);
 
 void main(int argc, char *argv[])
 {
@@ -48,7 +56,7 @@ void main(int argc, char *argv[])
 	struct termios oldtio,newtio;
 	char buf[1024];
 	int i ;
-	unsigned char test[9] = {0x5B, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x00, 0x5D};
+	//unsigned char test[9] = {0x5B, 0x00, 0x00, 0x00, 0x06, 0x01, 0x02, 0x00, 0x5D};
 
 	/* TCP Socket */
 	int s, n;
@@ -57,13 +65,13 @@ void main(int argc, char *argv[])
         //struct sockaddr_in server_addr : 서버의 소켓주소 구조체
         char bufT[BUF_LEN+1];	
 
-	/**/
+	/* Compaire to tcp and uart length */
 	char recv_copy_buf[1024];
 	int pkt_len;
 	char start_p = '[';
 	char end_p = ']';
 
-	/**/
+	/*UART function*/
 	char debug_rxd;
 	char state_ch1;
 	char rxd1_buf[1024];
@@ -78,37 +86,40 @@ void main(int argc, char *argv[])
 	// 20200924_ gto
 	char uart_send_buf[1024] = {0,};
 	char *bye = "bye";
-		
-	if(argc != 2)
-        {
-                printf("usage : %s ip_Address\n", argv[0]);
-                exit(0);
-        }
-        haddr = argv[1];
- 
+	//char *BOOT_ALARM = "[(B0)]";
+	//const char BOOT_MSG[12] = "5B284230295D"
+	//int boot_len = strlen(BOOT_ALARM);
+	
+	char boot_1 = '(';
+	char boot_2 = 'B';
+	char boot_3 = '1';
+	char boot_4 = ')';
+
+	int rdcnt;
+
         if((s = socket(PF_INET, SOCK_STREAM, 0)) < 0)
         {//소켓 생성과 동시에 소켓 생성 유효검사
-                printf("can't create socket\n");
-                exit(0);
+		printf("can't create socket\n");
+		exit(0);
         }
  
         bzero((char *)&server_addr, sizeof(server_addr));
-        //서버의 소켓주소 구조체 server_addr을 NULL로 초기화
- 
+        //서버의 소켓주소 구조체 server_addr을 NULL로 초기화 
         server_addr.sin_family = AF_INET;
-        //주소 체계를 AF_INET 로 선택
+	//주소 체계를 AF_INET 로 선택
         server_addr.sin_addr.s_addr = inet_addr(argv[1]);
         //32비트의 IP주소로 변환
         server_addr.sin_port = htons(PORT);
         //daytime 서비스 포트 번호
  
         if(connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-        {//서버로 연결요청
+        {
+		//서버로 연결요청
                 printf("can't connect.\n");
                 exit(0);
         }
 	else{
-		printf("Connect OK\r\n");
+		printf("TCP Connect OK\r\n");
 	}
 
       
@@ -119,6 +130,35 @@ void main(int argc, char *argv[])
         */
 	fd = open(MODEMDEVICE, O_RDWR | O_NOCTTY | O_NONBLOCK ); 	// O_NONBLOCK
 	if (fd <0) {perror(MODEMDEVICE); printf("uart open error\n");  exit(-1);}
+	//tcgetattr(fd,&oldtio); /* save current serial port settings */
+	else{
+		printf("UART Connect OK\r\n");
+		/*
+		write(fd, BOOT_ALARM, boot_len);*/
+		/*
+		write(fd, &start_p, 1);
+		write(fd, &boot_1, 1);
+		write(fd, &boot_2, 1);
+		write(fd, &boot_3, 1);
+		write(fd, &boot_4, 1);
+		write(fd, &end_p, 1);*/
+		/*Boot Alarm*/
+		/*
+		const char boot_msg[12] = "5B284230295D"; 
+		int length = strlen(boot_msg); 
+		int i; 
+		char buf = 0; 
+		for(i = 0; i < length; i++){ 
+			if(i % 2 != 0){ 
+				//printf("%c", hex_to_ascii(buf, st[i])); 
+				char *boot_c = hex_to_ascii(buf, boot_msg[i]);
+				write(fd, &boot_c, 12);
+			}else{ 
+				buf = boot_msg[i]; 
+			} 
+		}*/
+	}
+
 	tcgetattr(fd,&oldtio); /* save current serial port settings */
 	bzero(&newtio, sizeof(newtio)); /* clear struct for new port settings */        
         /* 
@@ -170,51 +210,54 @@ void main(int argc, char *argv[])
 	fcntl(s, F_SETFL, flag | O_NONBLOCK);	// O_NONBLOCK 
 
 	state_ch1 = START;
-	while(1){/*
-		int ret = strcmp(uart_send_buf, bye);
-		int final = 0;
-		if(ret == 0) {
-			printf("Goodbye uart! \n");
-			final = 1;
-			if (final == 1) {
-				break;
-			}
-		}
-		else {
-			scanf("%s", &uart_send_buf);
-			write(fd, &start_p, 1);
-			write(fd, uart_send_buf, 1024);
-			write(fd, &end_p, 1);
-		}*/
 
-		/*
+	write(fd, &start_p, 1);		
+	write(fd, &boot_1, 1);
+	write(fd, &boot_2, 1);
+	write(fd, &boot_3, 1);
+	write(fd, &boot_4, 1);
+	write(fd, &end_p, 1);
+
+	while(1){
+			
 		if((n=read(s,bufT,BUF_LEN)) > 0)
-	        {//서버가 보내오는 daytime 데이터의 수신
+	        {
+			//서버가 보내오는 daytime 데이터의 수신
         		bufT[n] = NULL;
 			pkt_len = ((int)bufT[0] << 24) | ((int)bufT[1] << 16) | ((int)bufT[2] << 8) | ((int)bufT[3]);
+			/*
 			if((pkt_len+1) == n)
 			{
 				write(fd,&start_p,1);
 				write(fd,bufT,n);
 				write(fd,&end_p,1);
-			}
-		}*/
+			}*/
+			printf("TCP receive: %s", bufT);
+			//write(s, n, strlen(bufT)+1);
+			write(s,(rxd1_buf+1),(ch1_cnt-2));
+			//write(fd, bufT, n);
 
+		}
+				
 		/* Serial receive function */
-		if ((n=read(fd, &debug_rxd, 1))>0) {
-			printf("%c", debug_rxd);
+		if ((n=read(fd, &debug_rxd, 1))>0) {			
+			//printf("%c\r\n", debug_rxd);
+			//printf("%c", &debug_rxd);
+			//write(fd, debug_rxd, 1); //receive date by pass (to mcu)
+
 			switch( state_ch1 ){
+				
 				case START :
 					if( debug_rxd == START_CODE ){
-						state_ch1 = LENGTH1 ;
-						rxd1_buf[0] = START_CODE ;
+						state_ch1 = LENGTH1;
+						rxd1_buf[0] = START_CODE;
 					}
 					break ;
 
 				case LENGTH1 :
 					SPAS_length =  (int)debug_rxd << 24 ;
 					state_ch1 = LENGTH2 ;
-					rxd1_buf[1] = debug_rxd ;
+					rxd1_buf[1] = debug_rxd ;					
 					break ;
 
 				case LENGTH2 :
@@ -236,6 +279,7 @@ void main(int argc, char *argv[])
 					state_ch1 = PAYLOARD ;
 					break ;
 
+				
 				case PAYLOARD :
 					rxd1_buf[ ch1_cnt++] = debug_rxd ;
 					if( ch1_cnt == (SPAS_length+1) ) state_ch1 = NULL ;
@@ -248,22 +292,39 @@ void main(int argc, char *argv[])
 					}
 					else state_ch1 = START ;
 					break ;
-
+				
 				case END :
 					if( debug_rxd == END_CODE ){
 						rxd1_buf[ ch1_cnt++]  = END_CODE ;
-						for(i=0;i<ch1_cnt; i++)printf("%02X. ",rxd1_buf[i] ) ;
-						write(s,(rxd1_buf+1),(ch1_cnt-2));
-						printf("Received OK....\n") ;	
+						for(i=0;i<ch1_cnt; i++)
+							printf("%02X. ",rxd1_buf[i] ) ;
+							write(s,(rxd1_buf+1),(ch1_cnt-2));
+							printf("Received OK....\n") ;	
 					}
 					state_ch1 = START;
 					ch1_cnt = 0 ;
 					break ;
 			}
+			printf("%s\r\n", rxd1_buf);
 		}
 	}	
 	
 	tcsetattr(fd,TCSANOW,&oldtio);
 	close(s);
-	return 0;
+	//return 0;
 }
+
+/* Convert function */
+int hex_to_int(char c){ 
+	int first = c/16 - 3; 
+	int second = c % 16; 
+	int result = first*10 + second; 
+	if(result > 9) result--; 
+	return result; 
+} 
+
+int hex_to_ascii(char c, char d){ 
+	int high = hex_to_int(c) * 16; 
+	int low = hex_to_int(d); 
+	return high+low; 
+} 
